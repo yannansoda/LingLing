@@ -1,0 +1,42 @@
+########################
+# Python / Streamlit app
+########################
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+LingLing/
+venv/
+.venv/
+env/
+ENV/
+
+# Packages / build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Logs
+*.log
+logs/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Streamlit
+# Keep config in version control if you add it, but never commit secrets.
+.streamlit/secrets.toml
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*~
+
+# macOS
+.DS_Store
+
