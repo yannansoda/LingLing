@@ -1,8 +1,11 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import requests
 import json
-from typing import List, Dict
+from typing import List, Dict, Tuple
 import os
+import re
+from collections import Counter
 
 # Page configuration
 st.set_page_config(
@@ -103,7 +106,7 @@ def get_css(dark_mode):
     
     /* Large translation text */
     .translation-text {{
-        font-size: 1.5rem;
+        font-size: 1.2rem;
         line-height: 1.8;
         color: {text_color};
         font-weight: 400;
@@ -112,6 +115,21 @@ def get_css(dark_mode):
         border-radius: 8px;
         border-left: 3px solid {text_color};
         margin: 1rem 0;
+    }}
+    
+    /* Difficult word highlighting */
+    .difficult-word {{
+        background-color: {"#ffd89b40" if not dark_mode else "#ffd89b30"};
+        border-bottom: 2px solid #ff9800;
+        padding: 2px 4px;
+        border-radius: 3px;
+        font-weight: 600;
+        cursor: help;
+        transition: background-color 0.2s;
+    }}
+    
+    .difficult-word:hover {{
+        background-color: {"#ffd89b80" if not dark_mode else "#ffd89b50"};
     }}
     
     /* Modern input styling - FIX TEXT VISIBILITY */
@@ -265,7 +283,7 @@ def get_css(dark_mode):
     /* CEFR level cards */
     .cefr-card {{
         text-align: center;
-        padding: 0.5rem 0.75rem;
+        padding: 0.25rem 0.3rem;
         border-radius: 5px;
         margin: 0.15rem;
         transition: transform 0.2s;
@@ -425,6 +443,252 @@ LANGUAGES = {
     "Arabic": "AR",
 }
 
+# ========================================================
+# FEATURE 1: PRONUNCIATION SUPPORT
+# ========================================================
+def get_language_voice_code(lang_code: str) -> str:
+    """
+    Map DeepL language codes to browser Web Speech API language codes.
+    Returns the BCP 47 language tag for speechSynthesis.
+    """
+    voice_map = {
+        "EN": "en-US",
+        "DE": "de-DE",
+        "SV": "sv-SE",
+        "FR": "fr-FR",
+        "ES": "es-ES",
+        "IT": "it-IT",
+        "PT": "pt-PT",
+        "RU": "ru-RU",
+        "JA": "ja-JP",
+        "ZH": "zh-CN",
+        "NL": "nl-NL",
+        "PL": "pl-PL",
+        "TR": "tr-TR",
+        "EL": "el-GR",
+        "CS": "cs-CZ",
+        "DA": "da-DK",
+        "FI": "fi-FI",
+        "NO": "no-NO",
+        "KO": "ko-KR",
+        "AR": "ar-SA",
+    }
+    return voice_map.get(lang_code, "en-US")
+
+
+def create_pronunciation_button(text: str, lang_code: str, button_key: str):
+    voice_lang = get_language_voice_code(lang_code)
+
+    safe_text = (
+        text.replace("\\", "\\\\")
+            .replace("'", "\\'")
+            .replace('"', '\\"')
+            .replace("\n", " ")
+    )
+
+    html_code = f"""
+    <div style="margin: 1rem 0;">
+        <button id="btn_{button_key}"
+            style="
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                border: none;
+                padding: 0.6rem 1.2rem;
+                border-radius: 8px;
+                font-size: 1rem;
+                cursor: pointer;
+            ">
+            🔊 Play Pronunciation
+        </button>
+
+        <span id="status_{button_key}" style="margin-left: 1rem;"></span>
+    </div>
+
+    <script>
+    const button = document.getElementById("btn_{button_key}");
+    const status = document.getElementById("status_{button_key}");
+
+    button.addEventListener("click", function() {{
+        if (!window.speechSynthesis) {{
+            alert("Speech synthesis not supported in this browser.");
+            return;
+        }}
+
+        window.speechSynthesis.cancel();
+
+        let utterance = new SpeechSynthesisUtterance("{safe_text}");
+        utterance.lang = "{voice_lang}";
+        utterance.rate = 0.9;
+
+        status.textContent = "▶️ Playing...";
+
+        utterance.onend = function() {{
+            status.textContent = "";
+        }};
+
+        window.speechSynthesis.speak(utterance);
+    }});
+    </script>
+    """
+
+    components.html(html_code, height=60)
+
+# ========================================================
+# FEATURE 2: WORD DIFFICULTY HIGHLIGHTING
+# ========================================================
+
+# Basic CEFR word lists (simplified - in production, use comprehensive lists)
+# These are example words for demonstration. Real implementation would use full CEFR wordlists.
+BASIC_CEFR_WORDS = {
+    "A1": {
+        "EN": ["the", "a", "is", "are", "am", "be", "have", "has", "do", "does", "can", "will", 
+               "I", "you", "he", "she", "it", "we", "they", "my", "your", "his", "her", "its", "our", "their",
+               "what", "where", "when", "who", "how", "why", "yes", "no", "hello", "goodbye", "please", "thank",
+               "one", "two", "three", "four", "five", "good", "bad", "big", "small", "new", "old"],
+        "DE": ["der", "die", "das", "ein", "eine", "ist", "sind", "sein", "haben", "ich", "du", "er", "sie", "es",
+               "wir", "ihr", "mein", "dein", "sein", "unser", "was", "wo", "wann", "wer", "wie", "warum",
+               "ja", "nein", "hallo", "gut", "schlecht", "groß", "klein", "neu", "alt"],
+        "SV": ["en", "ett", "är", "vara", "ha", "har", "jag", "du", "han", "hon", "den", "det", "vi", "ni", "de",
+               "min", "din", "vad", "var", "när", "vem", "hur", "varför", "ja", "nej", "hej", "god", "dålig"],
+        "FR": ["le", "la", "les", "un", "une", "est", "sont", "être", "avoir", "je", "tu", "il", "elle", "nous", "vous",
+               "mon", "ton", "son", "notre", "votre", "quoi", "où", "quand", "qui", "comment", "pourquoi",
+               "oui", "non", "bonjour", "bon", "mauvais", "grand", "petit"],
+    },
+    "A2": {
+        "EN": ["make", "go", "come", "see", "know", "get", "take", "think", "want", "need", "like", "love",
+               "time", "day", "year", "people", "way", "work", "life", "world", "school", "home", "food"],
+        "DE": ["machen", "gehen", "kommen", "sehen", "wissen", "nehmen", "denken", "wollen", "brauchen",
+               "Zeit", "Tag", "Jahr", "Leute", "Arbeit", "Leben", "Welt", "Schule", "Haus"],
+        "SV": ["göra", "gå", "komma", "se", "veta", "ta", "tänka", "vilja", "behöva", "tid", "dag", "år",
+               "folk", "arbete", "liv", "värld", "skola", "hem"],
+        "FR": ["faire", "aller", "venir", "voir", "savoir", "prendre", "penser", "vouloir", "aimer",
+               "temps", "jour", "année", "gens", "travail", "vie", "monde", "école", "maison"],
+    }
+}
+
+def tokenize_text(text: str, lang_code: str) -> List[str]:
+    """
+    Tokenize text into words, handling language-specific punctuation.
+    
+    Args:
+        text: The text to tokenize
+        lang_code: Language code for language-specific rules
+    
+    Returns:
+        List of word tokens
+    """
+    # Remove punctuation but keep apostrophes in words (for contractions)
+    # Split on whitespace and common punctuation
+    words = re.findall(r"\b[\w']+\b", text.lower())
+    return words
+
+def is_word_difficult(word: str, lang_code: str) -> Tuple[bool, str]:
+    """
+    Determine if a word is difficult based on multiple heuristics.
+    
+    Args:
+        word: The word to analyze
+        lang_code: Language code
+    
+    Returns:
+        Tuple of (is_difficult: bool, reason: str)
+    """
+    word_lower = word.lower().strip()
+    
+    # Skip very short words (likely articles, prepositions)
+    if len(word_lower) <= 2:
+        return False, ""
+    
+    # Check against basic CEFR A1/A2 word lists
+    a1_words = BASIC_CEFR_WORDS.get("A1", {}).get(lang_code, [])
+    a2_words = BASIC_CEFR_WORDS.get("A2", {}).get(lang_code, [])
+    
+    if word_lower in a1_words:
+        return False, ""
+    if word_lower in a2_words:
+        return False, ""
+    
+    # Heuristic 1: Word length (longer words tend to be more advanced)
+    if len(word_lower) >= 10:
+        return True, f"Long word - likely advanced vocabulary"
+    
+    # Heuristic 2: Compound words (common in German, Swedish)
+    if lang_code in ["DE", "SV"] and len(word_lower) >= 12:
+        return True, "Compound word - requires understanding of word components"
+    
+    # Heuristic 3: Words with uncommon letter patterns
+    # This is a simplified heuristic - real implementation would use frequency data
+    # Fixed: Check if word is NOT in basic word lists
+    if len(word_lower) >= 7:
+        if word_lower not in a1_words and word_lower not in a2_words:
+            return True, "Intermediate/advanced vocabulary level"
+    
+    return False, ""
+
+def analyze_word_difficulty(text: str, lang_code: str) -> Dict:
+    """
+    Analyze word difficulty in a translated sentence.
+    
+    Args:
+        text: The translated text
+        lang_code: Target language code
+    
+    Returns:
+        Dictionary with difficult words and their explanations
+    """
+    words = tokenize_text(text, lang_code)
+    difficult_words = {}
+    
+    for word in words:
+        is_difficult, reason = is_word_difficult(word, lang_code)
+        if is_difficult:
+            # Store the original word (not lowercase) for display
+            original_word = word
+            if original_word not in difficult_words:
+                difficult_words[original_word] = {
+                    "reason": reason,
+                    "length": len(original_word),
+                    "count": 1
+                }
+            else:
+                difficult_words[original_word]["count"] += 1
+    
+    return difficult_words
+
+def highlight_difficult_words(text: str, difficult_words: Dict) -> str:
+    """
+    Create HTML with difficult words highlighted.
+    
+    Args:
+        text: Original text
+        difficult_words: Dictionary of difficult words with metadata
+    
+    Returns:
+        HTML string with highlighted words
+    """
+    if not difficult_words:
+        return text
+    
+    # Create a pattern that matches whole words only
+    # Sort by length (longest first) to avoid partial matches
+    sorted_words = sorted(difficult_words.keys(), key=len, reverse=True)
+    
+    result = text
+    for word in sorted_words:
+        # Case-insensitive whole-word replacement
+        pattern = re.compile(r'\b' + re.escape(word) + r'\b', re.IGNORECASE)
+        reason = difficult_words[word]["reason"]
+        
+        # Create tooltip with reason
+        replacement = f'<span class="difficult-word" title="{reason}">{word}</span>'
+        result = pattern.sub(replacement, result, count=1)
+    
+    return result
+
+# ========================================================
+# EXISTING FUNCTIONS (kept unchanged)
+# ========================================================
+
 def get_deepl_translation(text: str, target_lang: str, api_key: str) -> str:
     """
     Translate text using DeepL Free API.
@@ -519,69 +783,9 @@ def analyze_cefr_level(text: str, target_lang: str) -> Dict:
     # Normalize to percentages
     total = sum(scores.values())
     if total > 0:
-        scores = {k: round(v / total * 100, 1) for k, v in scores.items()}
+        scores = {k: round(v / total * 100) for k, v in scores.items()}
     
     return scores
-
-def get_difficulty_points(text: str, translation: str, target_lang: str) -> Dict[str, List[str]]:
-    """
-    Identify key difficulty points for learners.
-    This is a simplified version. For production, consider using:
-    - Grammar analysis tools
-    - Word order detection
-    - Vocabulary difficulty analysis
-    
-    Returns a dictionary with difficulty categories.
-    """
-    difficulties = {
-        "vocabulary": [],
-        "grammar": [],
-        "sentence_structure": [],
-        "word_order": []
-    }
-    
-    # Simple heuristics (can be enhanced with actual NLP)
-    word_count = len(text.split())
-    
-    # Vocabulary difficulty
-    if word_count > 15:
-        difficulties["vocabulary"].append(f"Contains {word_count} words - may include advanced vocabulary")
-    if any(char in text for char in "äöüß"):
-        difficulties["vocabulary"].append("Contains special characters that may be unfamiliar")
-    
-    # Grammar difficulty
-    if "," in text:
-        difficulties["grammar"].append("Contains clauses that may require understanding of conjunctions")
-    if "?" in text or "!" in text:
-        difficulties["grammar"].append("Sentence type variation (question/exclamation)")
-    
-    # Sentence structure
-    if word_count > 10:
-        difficulties["sentence_structure"].append("Longer sentence structure requires understanding of multiple clauses")
-    if len(text.split('.')) > 1:
-        difficulties["sentence_structure"].append("Complex sentence with multiple parts")
-    
-    # Word order (language-specific)
-    if target_lang == "DE":  # German
-        if any(word in text.lower() for word in ["der", "die", "das", "den", "dem", "des"]):
-            difficulties["word_order"].append("German case system (Nominative, Accusative, Dative, Genitive)")
-        if text.split()[0].lower() not in ["ich", "du", "er", "sie", "es", "wir", "ihr"]:
-            difficulties["word_order"].append("Verb-second (V2) word order - verb comes second")
-    elif target_lang == "SV":  # Swedish
-        difficulties["word_order"].append("Verb-second word order (similar to German)")
-    elif target_lang == "FR":  # French
-        if "ne" in text.lower() or "pas" in text.lower():
-            difficulties["word_order"].append("French negation requires 'ne...pas' around the verb")
-        difficulties["word_order"].append("Adjective placement (usually after noun)")
-    
-    # Default messages if no specific issues found
-    if not any(difficulties.values()):
-        difficulties["vocabulary"].append("Beginner-friendly vocabulary level")
-        difficulties["grammar"].append("Basic grammatical structures")
-        difficulties["sentence_structure"].append("Simple sentence structure")
-        difficulties["word_order"].append("Standard word order for this language")
-    
-    return difficulties
 
 def get_cefr_explanation(level: str) -> str:
     """Get brief explanation of CEFR level."""
@@ -649,7 +853,10 @@ def main():
         1. Enter a sentence in any language
         2. Select one or more target languages
         3. Click 'Translate and Analyze'
-        4. Explore translations and CEFR levels
+        4. Explore:
+           - 🔊 Pronunciation
+           - 📊 CEFR levels
+           - 💡 Difficult words (highlighted)
         """)
     
     # Check for API key in environment or secrets first (if not already checked)
@@ -670,8 +877,8 @@ def main():
     if not st.session_state.api_key:
         st.markdown("""
         <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 3rem; border-radius: 12px; margin-bottom: 2rem;">
-            <h1 style="color: white; margin-bottom: 0.5rem;"> LingLing — for Language Learning</h1>
-            <p style="color: rgba(255,255,255,0.9); font-size: 1.1rem;">🔔 Translate Once, Learn Across Languages</p>
+            <h1 style="color: white; margin-bottom: 0.5rem;">🔔 LingLing — for Language Learning</h1>
+            <p style="color: rgba(255,255,255,0.9); font-size: 1.1rem;">Translate Once, Learn Across Languages -- with Pronunciation & Word Highlighting</p>
         </div>
         """, unsafe_allow_html=True)
         
@@ -710,8 +917,8 @@ def main():
     # Header
     st.markdown("""
     <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 2.5rem; border-radius: 12px; margin-bottom: 2rem;">
-        <h1 style="color: white; margin-bottom: 0.5rem;"> LingLing — for Language Learning</h1>
-        <p style="color: rgba(255,255,255,0.9); font-size: 1.1rem; margin: 0;">🔔 Translate Once, Learn Across Languages</p>
+        <h1 style="color: white; margin-bottom: 0.5rem;">🔔 LingLing — for Language Learning</h1>
+        <p style="color: rgba(255,255,255,0.9); font-size: 1.1rem; margin: 0;">Translate Once, Learn Across Languages — with Pronunciation & Word Highlighting</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -779,25 +986,26 @@ def main():
                     translation_error = translation
                     translation = input_sentence
                 
-                # Analyze CEFR (only on successful translation)
+                # Analyze CEFR and word difficulty (only on successful translation)
                 cefr_scores = None
-                # difficulties = None  # Commented out for now
+                difficult_words = None
                 if not translation_error:
                     cefr_scores = analyze_cefr_level(translation, lang_code)
-                    # Get difficulty points - COMMENTED OUT (will work on later)
-                    # difficulties = get_difficulty_points(input_sentence, translation, lang_code)
+                    # NEW: Analyze word difficulty
+                    difficult_words = analyze_word_difficulty(translation, lang_code)
                 
                 results.append({
                     "language": lang_name,
+                    "lang_code": lang_code,
                     "translation": translation,
                     "translation_error": translation_error,
                     "cefr_scores": cefr_scores,
-                    # "difficulties": difficulties  # Commented out
+                    "difficult_words": difficult_words,
                 })
         
         # Display results
         st.markdown("---")
-        st.markdown("#### 🌐 Translation")
+        st.markdown("#### 🌐 Translation Results")
 
         # Helper: show all results together, with a simple responsive layout
         def show_all_results(results_list):
@@ -840,15 +1048,12 @@ def main():
                     display_result(result)
 
 def display_result(result: Dict):
-    """Display a single result in a learner-friendly format."""
+    """Display a single result in a learner-friendly format with new features."""
     # Get dark mode state
     dark_mode = st.session_state.get('dark_mode', False)
     text_color = "#fafafa" if dark_mode else "#37352f"
     
     st.markdown(f"#### {result['language']}")
-    
-    # # Translation section with larger font
-    # st.markdown("#### Translation")
     
     # Check if there was a translation error
     if result.get('translation_error'):
@@ -856,17 +1061,34 @@ def display_result(result: Dict):
         st.warning("Please check your API key and ensure it's correctly configured.")
         return  # Skip analysis if translation failed
     
-    # Display translation with larger, modern styling
-    st.markdown(f"""
-    <div class="translation-text">{result['translation']}</div>
-    """, unsafe_allow_html=True)
+    # ========================================================
+    # FEATURE 1: Display translation with pronunciation button
+    # ========================================================
+    translation_text = result['translation']
+    difficult_words = result.get('difficult_words', {})
+    
+    # Create highlighted version if there are difficult words
+    if difficult_words:
+        highlighted_text = highlight_difficult_words(translation_text, difficult_words)
+        st.markdown(f"""
+        <div class="translation-text">{highlighted_text}</div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown(f"""
+        <div class="translation-text">{translation_text}</div>
+        """, unsafe_allow_html=True)
+    
+    # Add pronunciation button
+    button_key = f"speak_{result['lang_code']}_{hash(translation_text)}"
+    create_pronunciation_button(translation_text, result['lang_code'], button_key)
     
     # CEFR Level Distribution (only show if translation succeeded)
     if result.get('cefr_scores') is None:
         return
     
-    st.markdown("")
-    st.markdown("##### CEFR Level Distribution")
+    # st.markdown("")
+    # st.markdown("📊 **CEFR Level Distribution**")
+    st.markdown("##### 📊 CEFR Level Distribution")
     
     cefr_scores = result['cefr_scores']
     
@@ -886,66 +1108,41 @@ def display_result(result: Dict):
             score = cefr_scores.get(level, 0)
             st.markdown(f"""
             <div class="cefr-card" style="background-color: {bg_color}; border-left: 3px solid {color};">
-                <h3 style="margin: 0.25rem 0; color: {color}; font-size: 0.9rem;">{level}</h3>
-                <p style="margin: 0.5rem 0; font-size: 1.3rem; font-weight: 600; color: {text_color};">{score}%</p>
+                <h3 style="margin: 0.25rem 0; color: {color}; font-size: 0.75rem;">{level}</h3>
+                <p style="margin: 0.5rem 0; font-size: 1.0rem; font-weight: 600; color: {text_color};">{score}%</p>
             </div>
             """, unsafe_allow_html=True)
     
-    # CEFR explanations
-    st.markdown("")
-    st.markdown("###### Level Explanations")
-    explanation_cols = st.columns(3)
-    for i, level in enumerate(cefr_levels):
-        with explanation_cols[i % 3]:
-            if cefr_scores.get(level, 0) > 10:
-                st.caption(f"**{level}**: {get_cefr_explanation(level)}")
+    # ========================================================
+    # FEATURE 2: Display difficult words section
+    # ========================================================
+    if difficult_words:
+        with st.expander("💡 **Highlighted Vocabulary**"):
+            # Sort difficult words by length (longer = likely more difficult)
+            sorted_difficult = sorted(difficult_words.items(), key=lambda x: x[1]["length"], reverse=True)
+            
+            # Display in an organized way
+            for word, info in sorted_difficult[:5]:  # Show top 5 most difficult
+                # with st.expander(f"**{word}**"):
+                st.markdown(f"**{word}**: {info['reason']}")
+                    # st.markdown(f"**Appears:** {info['count']} time(s) in this sentence")
+                    # st.caption("💡 Tip: Try using this word in your own sentences to practice!")
+            
+            if len(sorted_difficult) > 5:
+                st.caption(f"+ {len(sorted_difficult) - 5} more advanced word(s) highlighted above")
+    else:
+        st.markdown("")
+        # st.info("✅ Great! This sentence uses beginner-friendly vocabulary.")
     
-    # COMMENTED OUT: Key Difficulty Points for Learners
-    # This section is commented out as requested - will work on it later
-    #
-    # if result.get('difficulties') is None:
-    #     return
-    #
-    # st.markdown("---")
-    # st.markdown("#### 🎓 Key Difficulty Points for Learners")
-    #
-    # difficulties = result['difficulties']
-    #
-    # difficulty_cols = st.columns(2)
-    #
-    # with difficulty_cols[0]:
-    #     st.markdown("##### 📚 Vocabulary")
-    #     if difficulties["vocabulary"]:
-    #         for point in difficulties["vocabulary"]:
-    #             st.markdown(f"- {point}")
-    #     else:
-    #         st.markdown("- No major vocabulary challenges")
-    #     
-    #     st.markdown("##### 📖 Grammar")
-    #     if difficulties["grammar"]:
-    #         for point in difficulties["grammar"]:
-    #             st.markdown(f"- {point}")
-    #     else:
-    #         st.markdown("- Basic grammatical structures")
-    #
-    # with difficulty_cols[1]:
-    #     st.markdown("##### 🏗️ Sentence Structure")
-    #     if difficulties["sentence_structure"]:
-    #         for point in difficulties["sentence_structure"]:
-    #             st.markdown(f"- {point}")
-    #     else:
-    #         st.markdown("- Simple sentence structure")
-    #     
-    #     st.markdown("##### 🔄 Word Order")
-    #     if difficulties["word_order"]:
-    #         for point in difficulties["word_order"]:
-    #             st.markdown(f"- {point}")
-    #     else:
-    #         st.markdown("- Standard word order")
+    # # CEFR explanations
+    # st.markdown("")
+    # st.markdown("###### 📚 Level Explanations")
+    # explanation_cols = st.columns(3)
+    # for i, level in enumerate(cefr_levels):
+    #     with explanation_cols[i % 3]:
+    #         if cefr_scores.get(level, 0) > 10:
+    #             st.caption(f"**{level}**: {get_cefr_explanation(level)}")
     
-    # Additional tip
-    st.markdown("")
-    st.markdown("💡 **Tip**: Practice reading similar sentences at your current CEFR level to gradually improve!")
 
 if __name__ == "__main__":
     main()
